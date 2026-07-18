@@ -1,0 +1,15 @@
+{
+  "name": "bxcleaner",
+  "version": "1.0.0",
+  "description": "Selfbot para limpar mensagens do Discord",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "keywords": ["discord", "cleaner"],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "discord.js": "^14.14.0"
+  }
+}
