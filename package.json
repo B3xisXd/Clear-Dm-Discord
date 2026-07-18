@@ -1,14 +1,19 @@
 {
   "name": "bxcleaner",
   "version": "1.0.0",
-  "description": "Selfbot para limpar mensagens do Discord",
+  "description": "Selfbot Discord para limpeza automática de mensagens com respeito a rate limits",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "dev": "node index.js"
   },
-  "keywords": ["discord", "cleaner"],
-  "author": "",
-  "license": "ISC",
+  "keywords": ["discord", "cleaner", "selfbot", "delete", "messages"],
+  "author": "BXCleaner Dev",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/B3xisXd/Clear-Dm.git"
+  },
   "dependencies": {
     "axios": "^1.6.0"
   }
