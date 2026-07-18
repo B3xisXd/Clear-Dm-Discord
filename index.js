@@ -1,13 +1,17 @@
-const { Client } = require('discord.js');
+const axios = require('axios');
 const config = require('./config.js');
 const readline = require('readline');
 
-const client = new Client({ intents: [] });
+const API_URL = 'https://discord.com/api/v10';
+const headers = {
+  'Authorization': config.TOKEN,
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+};
 
 let deletedCount = 0;
 let isDeleting = false;
+let userId = null;
 
-// Interface para input do usuário
 const rl = readline.createInterface({
   input: process.stdin,
   output: process.stdout
@@ -19,14 +23,79 @@ function askQuestion(question) {
   });
 }
 
-client.on('ready', async () => {
-  console.log('\n╔════════════════════════════════════════╗');
-  console.log('║       BXCleaner v1.0                   ║');
-  console.log('╠════════════════════════════════════════╣');
-  console.log(`║ Conectado como: ${client.user.username.padEnd(28)}║`);
-  console.log('╚════════════════════════════════════════╝\n');
-
+async function verifyToken() {
   try {
+    const response = await axios.get(`${API_URL}/users/@me`, { headers });
+    userId = response.data.id;
+    return response.data.username;
+  } catch (error) {
+    if (error.response?.status === 401) {
+      throw new Error('Token inválido! Verifique config.js');
+    }
+    throw error;
+  }
+}
+
+async function getChannelInfo(channelId) {
+  try {
+    const response = await axios.get(`${API_URL}/channels/${channelId}`, { headers });
+    return response.data;
+  } catch (error) {
+    if (error.response?.status === 404) {
+      throw new Error('Canal não encontrado!');
+    }
+    throw error;
+  }
+}
+
+async function getMessages(channelId, beforeId = null) {
+  try {
+    let url = `${API_URL}/channels/${channelId}/messages?limit=100`;
+    if (beforeId) url += `&before=${beforeId}`;
+    
+    const response = await axios.get(url, { headers });
+    return response.data;
+  } catch (error) {
+    if (error.response?.status === 429) {
+      const retryAfter = (error.response.headers['retry-after'] || 1) * 1000;
+      console.log(`⏸️  Rate limit! Aguardando ${(retryAfter / 1000).toFixed(1)}s...`);
+      await new Promise(resolve => setTimeout(resolve, retryAfter));
+      return getMessages(channelId, beforeId);
+    }
+    throw error;
+  }
+}
+
+async function deleteMessage(channelId, messageId) {
+  try {
+    await axios.delete(`${API_URL}/channels/${channelId}/messages/${messageId}`, { headers });
+    deletedCount++;
+    console.log(`✓ Mensagem deletada | Total: ${deletedCount}`);
+    await new Promise(resolve => setTimeout(resolve, config.DELETE_INTERVAL));
+  } catch (error) {
+    if (error.response?.status === 429) {
+      const retryAfter = (error.response.headers['retry-after'] || 1) * 1000;
+      console.log(`⏸️  Rate limit! Aguardando ${(retryAfter / 1000).toFixed(1)}s...`);
+      await new Promise(resolve => setTimeout(resolve, retryAfter));
+      return deleteMessage(channelId, messageId);
+    } else if (error.response?.status === 404) {
+      return;
+    }
+    throw error;
+  }
+}
+
+async function main() {
+  try {
+    console.log('\n╔════════════════════════════════════════╗');
+    console.log('║       BXCleaner v1.0                   ║');
+    console.log('║          (Selfbot Mode)                ║');
+    console.log('╚════════════════════════════════════════╝\n');
+
+    console.log('🔐 Verificando token...');
+    const username = await verifyToken();
+    console.log(`✅ Conectado como: ${username}\n`);
+
     const channelId = await askQuestion('📝 Digite o ID do canal: ');
     
     if (!channelId || channelId.trim() === '') {
@@ -34,20 +103,11 @@ client.on('ready', async () => {
       process.exit(1);
     }
 
-    const channel = await client.channels.fetch(channelId.trim()).catch(() => null);
-
-    if (!channel) {
-      console.log('❌ Canal não encontrado! Verifique o ID.');
-      process.exit(1);
-    }
-
-    if (channel.isDMBased()) {
-      console.log('❌ Este é um canal DM. Use o ID de um canal de servidor.');
-      process.exit(1);
-    }
+    console.log('🔍 Buscando informações do canal...');
+    const channel = await getChannelInfo(channelId.trim());
 
     const confirmation = await askQuestion(
-      `\n⚠️  Tem certeza que quer deletar TODAS as mensagens do canal "${channel.name}"? (sim/não): `
+      `\n⚠️  Tem certeza que quer deletar TODAS as mensagens do canal "${channel.name || 'desconhecido'}"? (sim/não): `
     );
 
     if (confirmation.toLowerCase() !== 'sim') {
@@ -55,15 +115,15 @@ client.on('ready', async () => {
       process.exit(1);
     }
 
-    await deleteMessages(channel);
+    await deleteMessages(channelId.trim());
 
   } catch (error) {
     console.error('❌ Erro:', error.message);
     process.exit(1);
   }
-});
+}
 
-async function deleteMessages(channel) {
+async function deleteMessages(channelId) {
   if (isDeleting) return;
   isDeleting = true;
   deletedCount = 0;
@@ -71,14 +131,13 @@ async function deleteMessages(channel) {
   console.log(`\n⏳ Iniciando limpeza em ${config.START_DELAY / 1000} segundos...\n`);
   await new Promise(resolve => setTimeout(resolve, config.START_DELAY));
 
-  let lastMessageId = null;
+  let beforeId = null;
 
   while (true) {
     try {
-      // Buscar mensagens (limite de 100 por vez)
-      const messages = await channel.messages.fetch({ limit: 100, before: lastMessageId });
+      const messages = await getMessages(channelId, beforeId);
 
-      if (messages.size === 0) {
+      if (messages.length === 0) {
         console.log('\n✅ Limpeza concluída!');
         console.log(`📊 Total de mensagens deletadas: ${deletedCount}`);
         console.log('Encerrando em 3 segundos...\n');
@@ -89,35 +148,17 @@ async function deleteMessages(channel) {
         break;
       }
 
-      for (const message of messages.values()) {
-        try {
-          // Deletar apenas mensagens do usuário (selfbot)
-          if (message.author.id === client.user.id) {
-            await message.delete();
-            deletedCount++;
-            console.log(`✓ Mensagem deletada | Total: ${deletedCount}`);
-            
-            // Respeitar intervalo para evitar rate limit
-            await new Promise(resolve => setTimeout(resolve, config.DELETE_INTERVAL));
-          }
-        } catch (error) {
-          if (error.code === 429) {
-            // Rate limit
-            const retryAfter = error.retryAfter * 1000;
-            console.log(`⏸️  Rate limit! Aguardando ${(retryAfter / 1000).toFixed(1)}s...`);
-            await new Promise(resolve => setTimeout(resolve, retryAfter));
-          } else if (error.code !== 10008) {
-            // 10008 = Mensagem não encontrada (já foi deletada)
-            console.error('❌ Erro ao deletar:', error.message);
-          }
+      for (const message of messages) {
+        if (message.author.id === userId) {
+          await deleteMessage(channelId, message.id);
         }
       }
 
-      lastMessageId = messages.last().id;
+      beforeId = messages[messages.length - 1].id;
 
     } catch (error) {
-      if (error.code === 429) {
-        const retryAfter = error.retryAfter * 1000;
+      if (error.response?.status === 429) {
+        const retryAfter = (error.response.headers['retry-after'] || 1) * 1000;
         console.log(`⏸️  Rate limit! Aguardando ${(retryAfter / 1000).toFixed(1)}s...`);
         await new Promise(resolve => setTimeout(resolve, retryAfter));
       } else {
@@ -128,18 +169,12 @@ async function deleteMessages(channel) {
   }
 }
 
-client.on('error', error => {
-  console.error('❌ Erro do cliente:', error);
-});
-
-// Login com token
 if (!config.TOKEN || config.TOKEN === 'sua_token_aqui') {
   console.log('❌ ERRO: Configure sua token no arquivo config.js!');
   process.exit(1);
 }
 
-client.login(config.TOKEN).catch(error => {
-  console.error('❌ Erro ao conectar:', error.message);
-  console.log('Verifique se sua token está correta no config.js');
+main().catch(error => {
+  console.error('❌ Erro fatal:', error.message);
   process.exit(1);
 });
